@@ -3,8 +3,14 @@
 # DATA PREPARATION --------------------------------------------------------
 
 
-# Machine readable --------------------------------------------------------
+# Machine readable - prep data for ML --------------------------------------------------------
 
+# some of these steps will be focused on correlation analysis, an intermediary step 
+# to analyse quality of features before getting into Auto ML 
+
+# Correlation analysis works with numeric data only and is best when data is on 
+# the same scale, is close to normally distributed and categories are encoded 
+# numerically 
 
 
 
@@ -212,6 +218,8 @@ recipe_obj <- recipes::recipe(Attrition ~ ., data = train_readable_tbl) %>%
     step_YeoJohnson(skewed_feature_names) %>% 
     step_mutate_at(factor_names, fn = as.factor)
 
+tidy(recipe_obj)
+
 recipe_obj %>% 
     prep()
 
@@ -302,6 +310,7 @@ dummied_recipe_obj %>%
 # and are interpretable 
 # 
 # TL;DR - Found out if index variable step in recipes package : ) 
+# -- > looks like step_integer will do the trick 
 
 
 # update real recipe obj
@@ -316,15 +325,17 @@ recipe_obj <- recipes::recipe(Attrition ~ ., data = train_readable_tbl) %>%
 
 # Final recipe ------------------------------------------------------------
 
-recipe_obj <- recipes::recipe(Attrition ~ ., data = train_readable_tbl) %>% 
-    step_zv(all_predictors()) %>% 
-    step_YeoJohnson(skewed_feature_names) %>% 
-    step_mutate_at(factor_names, fn = as.factor) %>% 
-    step_center(all_numeric()) %>% 
-    step_scale(all_numeric())  %>% 
-    step_dummy(all_nominal())
+# need this from earlier step
+skewed_feature_names <- train_readable_tbl %>% 
+    select_if(is.numeric) %>% 
+    map_df(PerformanceAnalytics::skewness) %>% 
+    gather(factor_key = TRUE) %>% 
+    arrange(desc(value)) %>% 
+    filter(value >= 0.8) %>% 
+    filter(!key %in% c("JobLevel", "StockOptionLevel")) %>% 
+    pull(key) %>% 
+    as.character()
 
-recipe_obj
 
 # prepare recipe from human readable dataset 
 recipe_obj <- recipes::recipe(Attrition ~ ., data = train_readable_tbl) %>% 
@@ -349,8 +360,167 @@ test_tbl <- bake(recipe_obj, new_data = test_readable_tbl)
 
 
 
-## READY FOR CORRELATION ANALYSIS 
+
+# Correlation analysis ----------------------------------------------------
+
+# create function so able to run through multiple versions of correlation analysis, 
+# comparing correlations among our strategically grouped sets of variables
+
+data <- train_tbl
+
+feature_expr <- quo(Attrition_Yes)
+
+get_cor <- function(data, target, use = "pairwise.complete.obs", 
+                    fct_reorder = FALSE, fct_rev = FALSE) {
+    
+    feature_expr <- enquo(target)
+    feature_name <- quo_name(feature_expr)
+    
+    data_cor <- data %>% 
+        mutate_if(is.character, as.factor) %>% 
+        mutate_if(is.factor, as.numeric) %>% 
+        cor(use = use) %>% 
+        as_tibble() %>% 
+        mutate(feature = names(.)) %>% 
+        select(feature, !! feature_expr) %>% 
+        filter(!(feature == feature_name)) %>% 
+        mutate_if(is.character, as_factor)
+    
+    if (fct_reorder) {
+        data_cor <- data_cor %>% 
+            mutate(feature = fct_reorder(feature, !! feature_expr)) %>% 
+            arrange(feature)
+    }
+    
+    if (fct_rev) {
+        data_cor <- data_cor %>% 
+            mutate(feature = fct_rev(feature)) %>% 
+            arrange(feature)
+    }
+        
+    return(data_cor)
+    
+}
+
+# final functon can be called in 1 line of code
+# -- has safety to convert character vars to factors, to numeric (defensive programming?)
+# -- allows selction of type of correlation to use - defaults to most useful 
+# in author's POV - one that removes NA values by default
+# -- converts to tibble 
+# -- creates feature name column for easier comparison with target variable 
+# -- drops all other columns beyond target variable 
+# -- converts feature names to factors 
+
+train_tbl %>% 
+    get_cor(target = Attrition_Yes, fct_reorder = TRUE, fct_rev = TRUE)
 
 
+
+# plotting correlation ----------------------------------------------------
+
+data         <- train_tbl
+feature_expr <- quo(Attrition_Yes)
+
+# first 4 arguments relate to get_cor 
+# rest of args are plot customisations - labels and aesthetics (point and line sizes, colours) 
+# 
+# set args and target before stepping through function code 
+
+plot_cor <- function(data, target, fct_reorder = FALSE, fct_rev = FALSE, 
+                     include_lbl = TRUE, lbl_precision = 2, lbl_position = "outward",
+                     size = 2, line_size = 1, vert_size = 1, 
+                     color_pos = palette_light()[[1]], 
+                     color_neg = palette_light()[[2]]) {
+    
+    feature_expr <- enquo(target)
+    feature_name <- quo_name(feature_expr)
+    
+    data_cor <- data %>%
+        get_cor(!! feature_expr, fct_reorder = fct_reorder, fct_rev = fct_rev) %>%
+        mutate(feature_name_text = round(!! feature_expr, lbl_precision)) %>%
+        mutate(Correlation = case_when(
+            (!! feature_expr) >= 0 ~ "Positive",
+            TRUE                   ~ "Negative") %>% as.factor())
+    
+    g <- data_cor %>%
+        ggplot(aes_string(x = feature_name, y = "feature", group = "feature")) +
+        geom_point(aes(color = Correlation), size = size) +
+        geom_segment(aes(xend = 0, yend = feature, color = Correlation), size = line_size) +
+        geom_vline(xintercept = 0, color = palette_light()[[1]], size = vert_size) +
+        expand_limits(x = c(-1, 1)) +
+        theme_tq() +
+        scale_color_manual(values = c(color_neg, color_pos)) 
+    
+    if (include_lbl) g <- g + geom_label(aes(label = feature_name_text), hjust = lbl_position)
+    
+    return(g)
+    
+}
+
+# data section runs get_cor function, formats text labels and creates variable that 
+# groups between positive and negative correlation numbers for labels and colours in the plot
+# 
+# plot uses geom_point and geom_segment as in plot_attrition to show points and lines 
+# -- order is opposite way to plot_Attrition - does this matter? -- > ** Check video **  
+# 
+# last line has if statement allowing user to use labels or not
+
+train_tbl %>%
+    select(Attrition_Yes, contains("JobRole")) %>%
+    plot_cor(target = Attrition_Yes, fct_reorder = T, fct_rev = F)
+
+# Correlation Evaluation ----
+
+# uses same process as when inspecting histograms by data group 
+# NOTE - use of 'contains' to match child dummy variables
+# NOTE - some use ordered or reversed factors but most don't - presumably as 
+# easier to analyse if keep in groups ordered by variable 
+
+#   1. Descriptive features: age, gender, marital status 
+train_tbl %>%
+    select(Attrition_Yes, Age, contains("Gender"), 
+           contains("MaritalStatus"), NumCompaniesWorked, 
+           contains("Over18"), DistanceFromHome) %>%
+    plot_cor(target = Attrition_Yes, fct_reorder = T, fct_rev = F)
+
+#   2. Employment features: department, job role, job level
+train_tbl %>%
+    select(Attrition_Yes, contains("employee"), contains("department"), contains("job")) %>%
+    plot_cor(target = Attrition_Yes, fct_reorder = F, fct_rev = F) 
+
+#   3. Compensation features: HourlyRate, MonthlyIncome, StockOptionLevel 
+train_tbl %>%
+    select(Attrition_Yes, contains("income"), contains("rate"), contains("salary"), contains("stock")) %>%
+    plot_cor(target = Attrition_Yes, fct_reorder = F, fct_rev = F)
+
+#   4. Survey Results: Satisfaction level, WorkLifeBalance 
+train_tbl %>%
+    select(Attrition_Yes, contains("satisfaction"), contains("life")) %>%
+    plot_cor(target = Attrition_Yes, fct_reorder = F, fct_rev = F)
+
+#   5. Performance Data: Job Involvment, Performance Rating
+train_tbl %>%
+    select(Attrition_Yes, contains("performance"), contains("involvement")) %>%
+    plot_cor(target = Attrition_Yes, fct_reorder = F, fct_rev = F)
+
+#   6. Work-Life Features 
+train_tbl %>%
+    select(Attrition_Yes, contains("overtime"), contains("travel")) %>%
+    plot_cor(target = Attrition_Yes, fct_reorder = F, fct_rev = F)
+
+#   7. Training and Education 
+train_tbl %>%
+    select(Attrition_Yes, contains("training"), contains("education")) %>%
+    plot_cor(target = Attrition_Yes, fct_reorder = F, fct_rev = F)
+
+#   8. Time-Based Features: Years at company, years in current role
+train_tbl %>%
+    select(Attrition_Yes, contains("years")) %>%
+    plot_cor(target = Attrition_Yes, fct_reorder = F, fct_rev = F)
+
+# which one feature would I reduce to lessen turnover?
+train_tbl %>% 
+    plot_cor(target = Attrition_Yes, fct_reorder = TRUE, fct_rev = TRUE)
+# --> Reduce OverTime 
 
 
