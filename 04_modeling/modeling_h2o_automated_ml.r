@@ -115,12 +115,13 @@ automl_models_h2o <- h2o.automl(
     validation_frame = valid_h2o,
     leaderboard_frame = test_h2o,
     max_runtime_secs = 30,
-    nfolds = 5
+    nfolds = 5,
+    keep_cross_validation_models = TRUE
 )
 # use max run time to minimise modeling time initially. Once results look promising
 # increase the run time to get more models with highly tuned parameters
 # nfolds - accuracy vs. time trade off - 10 more accurate but takes longer
-
+# NOTE - had to re-add the keep_cv argument after 4.3 cross validation video
 
 typeof(automl_models_h2o)
 # S4 is a special data type in R that works like a list but uses a concept of 
@@ -136,11 +137,11 @@ leaderboard_df
 #leading model - by auc / logloss 
 automl_models_h2o@leader
 
-h2o.getModel("GLM_1_AutoML_20200727_132500")
+h2o.getModel("GLM_1_AutoML_20200728_172356")
 
-h2o.getModel("XGBoost_grid__1_AutoML_20200727_132500_model_1")
+h2o.getModel("XGBoost_1_AutoML_20200728_172356")
 
-h2o.getModel("DeepLearning_1_AutoML_20200727_132500")
+h2o.getModel("DeepLearning_grid__1_AutoML_20200728_172356_model_1")
 
 
 # extract model function --------------------------------------------------
@@ -172,21 +173,33 @@ automl_models_h2o@leaderboard %>%
 
 # saving and loading models -----------------------------------------------
 
-h2o.getModel("StackedEnsemble_BestOfFamily_AutoML_20200727_132500") %>% 
+h2o.getModel("StackedEnsemble_BestOfFamily_AutoML_20200728_172356") %>% 
     h2o.saveModel(path = "04_modeling/h2o_models/")
 
-h2o.getModel("XGBoost_grid__1_AutoML_20200727_132500_model_1") %>% 
+h2o.getModel("GLM_1_AutoML_20200728_172356") %>% 
     h2o.saveModel(path = "04_modeling/h2o_models/")
 
-h2o.getModel("GLM_1_AutoML_20200727_132500") %>% 
+h2o.getModel("StackedEnsemble_AllModels_AutoML_20200728_172356") %>% 
     h2o.saveModel(path = "04_modeling/h2o_models/")
 
-h2o.loadModel("04_modeling/h2o_models/XGBoost_grid__1_AutoML_20200727_132500_model_1")
+h2o.getModel("DeepLearning_grid__1_AutoML_20200728_172356_model_1") %>% 
+    h2o.saveModel(path = "04_modeling/h2o_models/")
+
+h2o.getModel("GBM_grid__1_AutoML_20200728_172356_model_4") %>% 
+    h2o.saveModel(path = "04_modeling/h2o_models/")
+
+h2o.getModel("XGBoost_1_AutoML_20200728_172356") %>% 
+    h2o.saveModel(path = "04_modeling/h2o_models/")
+
+# useful to save models so don't have to rerun - particularly if increase max run time to 
+# close to the 1 hour max. Also useful if linking to r markdown objects. 
+
+h2o.loadModel("04_modeling/h2o_models/XGBoost_1_AutoML_20200728_172356")
 
 
 # making predictions ------------------------------------------------------
 
-stacked_ensemble_h2o <- h2o.loadModel("04_modeling/h2o_models/StackedEnsemble_BestOfFamily_AutoML_20200727_132500")
+stacked_ensemble_h2o <- h2o.loadModel("04_modeling/h2o_models/StackedEnsemble_BestOfFamily_AutoML_20200728_172356")
 stacked_ensemble_h2o
 
 test_tbl
@@ -203,3 +216,76 @@ typeof(predictions)
 predictions_tbl <- predictions %>% as_tibble()
 
 predictions_tbl
+
+
+
+# explore h2o model parameters --------------------------------------------
+
+deeplearning_h2o <- h2o.loadModel("04_modeling/h2o_models/DeepLearning_grid__1_AutoML_20200728_172356_model_1")
+
+# ?h2o.deeplearning
+# review default paramaters (at start before autoML tunes paramaters)
+
+# access paramaters from saved model object
+deeplearning_h2o@parameters
+deeplearning_h2o@allparameters
+
+
+# can recreate the model using the paramaters 
+# or manually tune
+
+# view each CV model
+h2o.cross_validation_models(deeplearning_h2o)
+
+# extract auc metrics
+h2o.auc(deeplearning_h2o, train = TRUE, valid = TRUE, xval = TRUE)
+
+
+
+# 3. Visualising the leaderboard ------------------------------------------
+
+
+data_transformed <- automl_models_h2o@leaderboard %>% 
+    as_tibble() %>% 
+    mutate(model_type = str_split(model_id, "_", simplify = TRUE)[,1]) %>% 
+    slice(1:10) %>% 
+    rownames_to_column() %>% 
+    mutate(
+        model_id = as_factor(model_id) %>% reorder(auc),
+        model_type = as_factor(model_type)
+    ) %>% 
+    gather(key = key, value = value, -c(model_id, model_type, rowname), factor_key = TRUE) %>% 
+    mutate(model_id = paste0(rowname, ". ", model_id) %>% as_factor() %>% fct_rev())
+   
+# pivot_longer(3:8, names_to = "key", values_to = "value")
+
+# my preferred version has axis starting at 0 
+data_transformed %>% 
+    filter(key %in% c("auc", "logloss")) %>% 
+    ggplot(aes(x = value, y = model_id, colour = model_type)) +
+    geom_point(size = 3) + 
+    geom_label(aes(label = round(value, 2), hjust = "inward")) +
+    facet_wrap(. ~ key) +
+    theme_tq() +
+    scale_colour_tq() +
+    labs(title = "H2O Leaderboard Metrics", 
+         subtitle = paste0("Ordered by: auc"),
+         y = "Model Position, Model ID", x = "")
+    
+# lecturer version - free axis. More close up but overly accentuates differences 
+# btw models 
+data_transformed %>% 
+    filter(key %in% c("auc", "logloss")) %>% 
+    ggplot(aes(x = value, y = model_id, colour = model_type)) +
+    geom_point(size = 3) + 
+    geom_label(aes(label = round(value, 2), hjust = "inward")) +
+    facet_wrap(. ~ key, scales = "free_x") +
+    theme_tq() +
+    scale_colour_tq() +
+    labs(title = "H2O Leaderboard Metrics", 
+         subtitle = paste0("Ordered by: auc"),
+         y = "Model Position, Model ID", x = "")
+
+
+
+
