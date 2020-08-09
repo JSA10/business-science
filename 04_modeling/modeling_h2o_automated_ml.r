@@ -287,5 +287,220 @@ data_transformed %>%
          y = "Model Position, Model ID", x = "")
 
 
+h2o_leaderboard <- automl_models_h2o@leaderboard
+glimpse(h2o_leaderboard)
+glimpse(leaderbord_tbl)
+glimpse(data_transformed_tbl)
+
+
+
+plot_h2o_leaderboard <- function(h2o_leaderboard, order_by = c("auc", "logloss"),
+                                 n_max = 20, size = 4, include_lbl = TRUE) {
+    
+    #Setup inputs 
+    order_by <- tolower(order_by[[1]])
+    
+    leaderbord_tbl <- h2o_leaderboard %>% 
+        as_tibble() %>%
+        select(-c(aucpr, mean_per_class_error, rmse, mse)) %>% 
+        mutate(model_type = str_split(model_id, "_", simplify = TRUE)[,1]) %>% 
+        rownames_to_column(var = "rowname") %>% 
+        mutate(model_id = paste0(rowname, ". ", as.character(model_id)) %>% as.factor())
+                   
+    # Transformation
+    if (order_by == "auc") {
+        
+        data_transformed_tbl <- leaderbord_tbl %>% 
+            slice(1:n_max) %>% 
+            mutate(
+                model_id = as_factor(model_id) %>% reorder(auc),
+                model_type = as_factor(model_type)
+            ) %>% 
+            gather(key = key, value = value, -c(model_id, model_type, rowname), 
+                   factor_key = TRUE)
+            
+    } else if (order_by == "logloss") {
+        
+        data_transformed_tbl <- leaderbord_tbl %>% 
+            slice(1:n_max) %>% 
+            mutate(
+                model_id = as_factor(model_id) %>% reorder(logloss) %>% fct_rev(),
+                model_type = as_factor(model_type)
+            ) %>% 
+            gather(key = key, value = value, -c(model_id, model_type, rowname), 
+                   factor_key = TRUE) 
+        
+    } else {
+        stop(paste0("order_by = '", order_by, ". is not a permitted option."))
+    }
+    
+    # Visualisation 
+    g <- data_transformed %>% 
+        filter(key %in% c("auc", "logloss")) %>% 
+        ggplot(aes(x = value, y = model_id, colour = model_type)) +
+        geom_point(size = size) + 
+        geom_label(aes(label = round(value, 2), hjust = "inward")) +
+        facet_wrap( ~ key, scales = "free_x") +
+        theme_tq() +
+        scale_colour_tq() +
+        labs(title = "H2O Leaderboard Metrics", 
+             subtitle = paste0("Ordered by: ", toupper(order_by)),
+             y = "Model Position, Model ID", x = "")
+    
+    if (include_lbl) g <- g + geom_label(aes(label = round(value, 2), 
+                                             hjust = "inward"))
+    return(g)
+}
+
+
+automl_models_h2o@leaderboard %>% 
+    plot_h2o_leaderboard(order_by = "logloss")
+
+# order of logloss still off - double check vs. lecturer code 
+
+
+
+# 4. Assessing performance ------------------------------------------------
+
+stacked_ensemble_h2o <- h2o.loadModel("04_modeling/h2o_models/StackedEnsemble_BestOfFamily_AutoML_20200728_172356")
+
+deeplearning_h2o <- h2o.loadModel("04_modeling/h2o_models/DeepLearning_grid__1_AutoML_20200728_172356_model_1")
+
+glm_h2o <- h2o.loadModel("04_modeling/h2o_models/GLM_1_AutoML_20200728_172356")
+
+
+
+# create performance object
+performance_h2o <- h2o.performance(stacked_ensemble_h2o, newdata = as.h2o(test_tbl))
+typeof(performance_h2o)
+# s4 class 
+
+# object distinct to model - below accesses the performance object elements
+performance_h2o %>% slotNames()
+performance_h2o@metrics
+
+
+# Classifier summary metrics
+
+# "auc"
+#  = area under the curve - referring to a ROC plot (Receiver Operating Characteristics). 
+# This measures true positive rate (TPR) vs false positive rate (FPR)
+# - commonly used, not always best option. logloss preferred by lecturer
+h2o.auc(performance_h2o)
+
+# h2o.auc(performance_h2o, train = TRUE, valid = TRUE, xval = TRUE)
+# NOTE: The extra arguments are only for models, not performance object
+
+# gini coefficient 
+# -- AUC = (GiniCoeff + 1) / 2
+h2o.giniCoef(performance_h2o)
+# not used much by lecturer
+
+# log loss
+# - measures the class probability from the model against the actual value 
+# in binary format (0,1) - computes the mean error. Great way to measure the true 
+# performance of a classifier... 
+# (SOUNDS LIKE - LOG PROBABILITY - DEVIANCE METRIC IN STATISTICAL RETHINKING)
+h2o.logloss(performance_h2o)
+
+# Confusion matrix 
+# -- LEARN TO READ 
+# - Focus on understanding the threshold, precision and recall. 
+# - Critical to business analysis 
+h2o.confusionMatrix(performance_h2o)
+# works for perormance test object and pre test models
+h2o.confusionMatrix(stacked_ensemble_h2o)
+
+"""
+Confusion Matrix (vertical: actual; across: predicted) for max f1 @ threshold = 0.331456533971731:
+        No Yes    Error     Rate
+No     173  11 0.059783  =11/184
+Yes     12  24 0.333333   =12/36
+Totals 185  35 0.104545  =23/220
+"""
+# vertical (left col) = actual 
+# horizontal (top row) = predicted 
+# TP - FP
+# |    |
+# FN - TN
+
+# Threshold is the value that determines which class probability is a 0 or 1 
+#anything above threshold is predicted 1 - employee stays 
+# -- Need to understand how models change for different threshold values
+
+performance_h2o %>% 
+    h2o.metric() %>% 
+    as_tibble()
+# as threshold changes, can see that metrics completely change 
+
+performance_h2o %>% 
+    h2o.metric() %>% 
+    as_tibble() %>% 
+    glimpse()
+
+# F1 - optimal balance between precision and recall
+# -- Typically the threshold that maximises F1 is used as threshold cut off. 
+# --> Not always the best case! 
+# An expected value optimisation is needed when costs of false positives and false 
+# known 
+
+# PRECISION = FP measure = TP / TP + FP  --> did your model predict Yes (people leave) too often?
+# RECALL = FN measure = TP / TP + FN   --> DID your model predict No (people stay) too often?
+
+# tps - true positives, tpr - true positive rate ...
+
+# ACCURACY = TP % = TP / TP + FP + TN + FN 
+
+
+performance_tbl <- performance_h2o %>% 
+    h2o.metric() %>% 
+    as_tibble() 
+
+performance_tbl
+
+h2o.confusionMatrix(performance_h2o)
+# Precision calculation 
+24 / (24 + 11) # 0.6857
+
+# Recall calculation 
+24 / (24 + 12) # 0.6667 
+
+# in this business context we would prefer to give up some false positives 
+# (provide extra incentives to people who will stay anuyway) than gain false negatives 
+# (miss valuable people who end up quitting)
+
+# so recall more important in this and many business contexts 
+
+# F1 exists because there is often a trade off between precision and recall 
+# - the more you try and limit false negatives with threshold selection, your likely 
+# to increase false positives and vice versa.
+ 
+# F1 = 2 * (precision * recall) / (precision + recall)
+# --> metric for balancing precision and recall 
+2 * (0.6857 * 0.6667) / (0.6857 + 0.6667) # 0.676
+
+performance_tbl %>% 
+    filter(f1 == max(f1))
+# 0.676 
+# threshold of 0.331 balances precision and recall = maximises F1 
+
+# NOTE - the optimised F1 score isn't always the best choice for threshold in practise
+# as it misses the business context and the costs associated with false positives and 
+# false negatives. 
+# - This is where Expected Value comes in - discussed in chapter 7 
+
+
+performance_tbl %>% 
+    ggplot(aes(x = threshold)) +
+    geom_line(aes(y = precision), colour = "blue", size = 1) +
+    geom_line(aes(y = recall), colour = "red", size = 1) +
+    geom_vline(xintercept = h2o.find_threshold_by_max_metric(performance_h2o, "f1")) +
+    theme_tq() +
+    labs(title = "Precision vs Recall", y = "value")
+
+# f1 threshold not often at intersection point 
+
+
+
 
 
