@@ -128,11 +128,13 @@ typeof(automl_models_h2o)
 # 'slots'
 slotNames(automl_models_h2o)
 
+
+
 # extract models 
 automl_models_h2o@leaderboard
 # leaderboard as df
-leaderboard_df <- as_tibble(automl_models_h2o@leaderboard)
-leaderboard_df
+leaderboard_tbl <- as_tibble(automl_models_h2o@leaderboard)
+leaderboard_tbl
 
 #leading model - by auc / logloss 
 automl_models_h2o@leader
@@ -195,6 +197,20 @@ h2o.getModel("XGBoost_1_AutoML_20200728_172356") %>%
 # close to the 1 hour max. Also useful if linking to r markdown objects. 
 
 h2o.loadModel("04_modeling/h2o_models/XGBoost_1_AutoML_20200728_172356")
+
+# Load automl S4 object ------------------------------------------------------------
+
+# save as binary (only a temporary file?)
+#fn <- tempfile()
+#save(automl_models_h2o, ascii=FALSE, file=fn)
+#rm(automl_models_h2o)
+load(fn)
+x
+
+# Save as ASCII (temporary too?)
+save(automl_models_h2o, ascii = TRUE, file = fn)
+
+
 
 
 # making predictions ------------------------------------------------------
@@ -444,6 +460,11 @@ performance_h2o %>%
 # An expected value optimisation is needed when costs of false positives and false 
 # known 
 
+
+# Charts for data scientists - Precision vs Recall plot  -----------------------------------------------
+
+
+
 # PRECISION = FP measure = TP / TP + FP  --> did your model predict Yes (people leave) too often?
 # RECALL = FN measure = TP / TP + FN   --> DID your model predict No (people stay) too often?
 
@@ -489,7 +510,7 @@ performance_tbl %>%
 # false negatives. 
 # - This is where Expected Value comes in - discussed in chapter 7 
 
-
+# visualise precision vs. recall relationship by threshold  
 performance_tbl %>% 
     ggplot(aes(x = threshold)) +
     geom_line(aes(y = precision), colour = "blue", size = 1) +
@@ -501,6 +522,478 @@ performance_tbl %>%
 # f1 threshold not often at intersection point 
 
 
+# Charts for data scientists - ROC curve ----------------------------------
+
+path <- "04_modeling/h2o_models/DeepLearning_grid__1_AutoML_20200728_172356_model_1"
+
+load_model_performance_metrics <- function(path, test_tbl){
+    
+    model_h2o <- h2o.loadModel(path)
+    perf_h2o <-  h2o.performance(model_h2o, newdata = as.h2o(test_tbl))
+    
+    perf_h2o %>% 
+        h2o.metric() %>% 
+        as_tibble() %>% 
+        mutate(auc = h2o.auc(perf_h2o)) %>% 
+        select(tpr, fpr, auc)
+}
+
+load_model_performance_metrics(path, test_tbl)
+
+model_metrics_tbl <- fs::dir_info(path = "04_modeling/h2o_models/") %>% 
+    select(path) %>% 
+    mutate(metrics = map(path, load_model_performance_metrics, test_tbl)) %>% 
+    as_tibble() %>% 
+    unnest(cols = c(metrics))
+
+# mutate + map is a powerful combo - rowwise iteration in a tidy way 
+# unnest takes nested columns and spreads them out, like pivot_wider
 
 
+model_metrics_tbl %>% 
+    mutate(
+        path = str_split(path, pattern = "/", simplify = TRUE)[,3] 
+        %>% as_factor(),
+        auc = auc %>% round(3) %>% as.character() %>% as_factor()
+           ) %>% 
+    ggplot(aes(fpr, tpr, colour = path, linetype = auc)) +
+    geom_line(size = 1) + 
+    theme_tq() +
+    scale_colour_tq() +
+    theme(
+        legend.direction = "vertical"
+    ) +
+    labs(
+        title = "ROC Plot",
+        subtitle = "Performance of top performing models"
+    )
+
+# ROC Curve pits the True Positive Rate (Y) vs. False Positive Rate (X)
+
+# RECAP 
+# - TPR - rate at which people correctly identified as leaving 
+# - FPR - rate at which people incorrectly identified as leaving
+
+
+
+# Precision vs Recall - multiple model evaluation -------------------------
+
+path <- "04_modeling/h2o_models/DeepLearning_grid__1_AutoML_20200728_172356_model_1"
+
+load_model_performance_metrics <- function(path, test_tbl){
+    
+    model_h2o <- h2o.loadModel(path)
+    perf_h2o <-  h2o.performance(model_h2o, newdata = as.h2o(test_tbl))
+    
+    perf_h2o %>% 
+        h2o.metric() %>% 
+        as_tibble() %>% 
+        mutate(auc = h2o.auc(perf_h2o)) %>% 
+        select(tpr, fpr, auc, precision, recall)
+}
+
+load_model_performance_metrics(path, test_tbl)
+
+model_metrics_tbl <- fs::dir_info(path = "04_modeling/h2o_models/") %>% 
+    select(path) %>% 
+    mutate(metrics = map(path, load_model_performance_metrics, test_tbl)) %>% 
+    as_tibble() %>% 
+    unnest(cols = c(metrics))
+
+# unnest takes nested columns and spreads them out, like pivot_wider
+
+
+model_metrics_tbl %>% 
+    mutate(
+        path = str_split(path, pattern = "/", simplify = TRUE)[,3] 
+        %>% as_factor(),
+        auc = auc %>% round(3) %>% as.character() %>% as_factor()
+    ) %>% 
+    ggplot(aes(recall, precision, colour = path, linetype = auc)) +
+    geom_line(size = 1) + 
+    theme_tq() +
+    scale_colour_tq() +
+    theme(
+        legend.direction = "vertical"
+    ) +
+    labs(
+        title = "Precision vs Recall Plot",
+        subtitle = "Performance of top performing models"
+    )
+
+# Precision vs Recall - pit effect of false positive rate (fpr) against false 
+# negative rate (fnr) 
+
+# Precision - indicates how susceptible models are to FPs 
+# - predicting employees to leave incorrectly 
+
+# Recall - Indicates hoiw susceptible model is to FN's. 
+# - predicting employwees will stay incorrectly 
+
+
+# Recap business application ----------------------------------------------
+
+# False negatives are what we typically care about the most. 
+# - Recall indicates susceptibility to FN's (lower = worse)
+
+## -- We want to accurately predict which employees will leave (lower FNs) at the 
+## expense of over predicting employees to leave (FPs) 
+
+### The precision vs. recall curve shows us which models will give up less FPs 
+### as we optimise the threshold for FNs 
+
+
+
+# Gain and lift -----------------------------------------------------------
+
+# For business executives - want to emphasise how much model improves results 
+
+# extract predictions with class probabilities and append actual Attrition 
+# from test dataset 
+# 
+# sort by Yes class probability so start with view of models ability to predict 
+# those who left 
+ranked_predictions_tbl <- predictions_tbl %>% 
+    bind_cols(test_tbl) %>% 
+    select(predict:Yes, Attrition) %>% 
+    arrange(desc(Yes))
+
+# Gain 101 
+# - if this model had been in place and identified the first 10 people as all being 
+# likely to leave - then we have a shot at retaining 9 out of the 10 who actually left. 
+# --> the gain we get from having the model 
+
+# So the gain is 90% 
+# Lift would be comparing this gain to expected attrition from the whole dataset 
+# - 9 / 1.6 
+# --> So X times more likely to be able to target someone who is likely to leave 
+# by using this model.
+# Compare model vs. doing nothing 
+
+
+# grouping into cohorts of most likely to least likely to leave is at the heart of 
+# Gain / Lift chart. 
+# - enables us to show immediately that if a candidate has a high probability of 
+# leaving, how likely they are to leave. 
+
+calculated_gain_lift_tbl <- ranked_predictions_tbl %>% 
+    mutate(ntile = ntile(Yes, n = 10)) %>% 
+    group_by(ntile) %>% 
+    summarise(
+        cases = n(),
+        responses = sum(Attrition == "Yes")
+    ) %>% 
+    arrange(desc(ntile)) %>% 
+    mutate(group = row_number()) %>% 
+    select(group, cases, responses) %>% 
+    mutate(
+        cumulative_responses = cumsum(responses),
+        pct_responses = responses / sum(responses),
+        gain = cumsum(pct_responses),
+        cumulative_pct_cases = cumsum(cases) / sum(cases), 
+        lift = gain / cumulative_pct_cases,
+        gain_baseline = cumulative_pct_cases, 
+        lift_baseline = gain_baseline / cumulative_pct_cases
+    )
+
+# 10th decile - most likely to leave and 17 /22 actually did 
+# ntile - splits continuous data into n percentiles
+
+# cumulative gain_baseline always equal to cumulative ntile percentage 
+# lift baseline always = 1 
+
+## key outtakes 
+# - gain ability to target ~70% of leavers by focusing on just the 2 cohorts the model predicted as most likely to leave 
+# - For cohort 1 this would be a 5X lift vs. waht we could do with no model 
+# - For cohort 2 this would be a 3.5X lift ... 
+
+calculated_gain_lift_tbl   
+
+# Using h2o to create gain / lift for us 
+
+gain_lift_tbl <- performance_h2o %>% 
+    h2o.gainsLift() %>% 
+    as_tibble()
+
+glimpse(gain_lift_tbl)
+# h2o groups into 16 ntiles 
+
+gain_transformed_tbl <- gain_lift_tbl %>%
+    select(group, cumulative_data_fraction, cumulative_capture_rate, cumulative_lift) %>% 
+    select(-contains("lift")) %>% 
+    mutate(baseline = cumulative_data_fraction) %>% 
+    rename(gain = cumulative_capture_rate) %>% 
+    pivot_longer(gain:baseline, names_to = "key", values_to = "value")
+
+gain_transformed_tbl %>% 
+    ggplot(aes(x = cumulative_data_fraction, y = value, colour = key)) +
+    geom_line(size = 1.5) +
+    theme_tq() +
+    scale_colour_tq() +
+    labs(
+        title = "Gain Chart",
+        x = "Cumulative Data Fraction",
+        y = "Gain"
+    )
+
+# explaining data science to execs can be hard 
+# -- want to communicate in terms they care about -- normally RESULTS 
+# - more customers 
+# - less churn 
+# - better quality
+# - reduced lead times 
+ 
+# in this case - strategically targeting the people with the highest probability of 
+# leaving the company will improve retention 
+# - right now, this chart shows that by identifying and targeting the 25% of 
+# people that the model has identified as most likely to leave, you've identified 
+# 75% of all leavers and have the power to intervene. 
+
+
+
+lift_transformed_tbl <- gain_lift_tbl %>%
+    select(group, cumulative_data_fraction, cumulative_capture_rate, cumulative_lift) %>% 
+    select(-contains("capture")) %>% 
+    mutate(baseline = 1) %>% 
+    rename(lift = cumulative_lift) %>% 
+    pivot_longer(lift:baseline, names_to = "key", values_to = "value")
+lift_transformed_tbl
+
+lift_transformed_tbl %>% 
+    ggplot(aes(x = cumulative_data_fraction, y = value, colour = key)) +
+    geom_line(size = 1.5) +
+    theme_tq() +
+    scale_colour_tq() +
+    labs(
+        title = "Lift Chart",
+        x = "Cumulative Data Fraction",
+        y = "Lift"
+    )
+# Lift is a multiplier - how many positive responses would you expect over and above
+# targeting at random 
+
+
+# Explaining gain and lift chart to executives ----------------------------
+
+# If we target the 25% of employees with incentives to stay, likely to 
+# only retain 25% of people who leave. 
+
+# If however we target the 25% of people most likely to leave, as identified by the model: 
+# - Gain the ability to target 75% vs. the baseline of 25% 
+# - Could see a lift in retention of 3x the baseline. 
+
+# Lift example - if offer stock strategically to high performers at risk could be 3X more effective
+# with the model directing 
+
+# Gain and Lift go hand in hand. Lift is the delta (scalar multiple) of the gain over the baseline 
+
+
+# 5. Performance visualisation --------------------------------------------
+
+h2o_leaderboard <- automl_models_h2o@leaderboard
+typeof(h2o_leaderboard)
+
+new_data <- test_tbl
+order_by <- "auc"
+max_models <- 4
+size <- 1
+
+plot_h2o_performance <- function(h2o_leaderboard, new_data, order_by = c("auc", "logloss"),
+                                 max_models = 3, size = 1.5) {
+    
+    # Inputs 
+    
+    leaderboard_tbl <- h2o_leaderboard %>% 
+        as_tibble() %>% 
+        slice(1:max_models) 
+    
+    new_data_tbl <- new_data %>% 
+        as_tibble()
+    
+    order_by <- tolower(order_by[[1]])
+    order_by_expr <- rlang::sym(order_by)
+    # rlang::sym converts a string to unevaluated col name symbol that can be 
+    # evaluated in tidyverse functions later using !! - now {{}}
+    
+    h2o.no_progress()
+    # turns off progress bars in h2o 
+    
+    # 1. Model metrics 
+    
+    get_model_performance_metrics <- function(model_id, test_tbl) {
+        
+        model_h2o <- h2o.getModel(model_id)
+        perf_h2o <- h2o.performance(model_h2o, newdata = as.h2o(test_tbl))
+        
+        perf_h2o %>% 
+            h2o.metric() %>% 
+            as_tibble() %>% 
+            select(threshold, tpr, fpr, precision, recall)
+        
+    } 
+    
+    model_metrics_tbl <- leaderboard_tbl %>% 
+        mutate(metrics = purrr::map(model_id, get_model_performance_metrics, new_data_tbl)) %>% 
+        unnest(cols = c(metrics)) %>% 
+        mutate(
+            model_id = as_factor(model_id) %>% 
+                fct_reorder(!! order_by_expr, .desc = ifelse(order_by == "auc", TRUE, FALSE)),
+            auc = auc %>% 
+                round(3) %>% 
+                as.character() %>% 
+                as_factor() %>% 
+                fct_reorder(as.numeric(model_id)), 
+            logloss = logloss %>% 
+                round(4) %>% 
+                as.character() %>% 
+                as_factor() %>% 
+                fct_reorder(as.numeric(model_id))
+        )
+    
+    # 1A. ROC Plot 
+    
+    # use aes_string to pass order_by symbol
+    p1 <- model_metrics_tbl %>% 
+        ggplot(aes_string("fpr", "tpr", colour = "model_id", linetype = order_by)) +
+        geom_line(size = size) +
+        theme_tq() +
+        scale_colour_tq() +
+        labs(title = "ROC", x = "FPR", y = "TPR")+
+        theme(legend.direction = "vertical")
+    
+    # 1B. Precision vs Recall
+    
+    p2 <- model_metrics_tbl %>% 
+        ggplot(aes_string("recall", "precision", colour = "model_id", linetype = order_by)) +
+        geom_line(size = size) +
+        theme_tq() +
+        scale_colour_tq() +
+        labs(title = "Precision vs Recall", x = "Recall", y = "Precision")+
+        theme(legend.position = "none")
+    
+    # 2. Gain / Lift plot
+    
+    get_gain_lift <- function(model_id, test_tbl){
+        
+        model_h2o <- h2o.getModel(model_id)
+        perf_h2o <- h2o.performance(model_h2o, newdata = as.h2o(test_tbl))
+        
+        perf_h2o %>% 
+            h2o.gainsLift() %>% 
+            as_tibble() %>% 
+            select(group, cumulative_data_fraction, cumulative_capture_rate, cumulative_lift)
+        
+    }
+    
+    gain_lift_tbl <- leaderboard_tbl %>% 
+        mutate(metrics = map(model_id, get_gain_lift, new_data_tbl)) %>% 
+        unnest(cols = c(metrics)) %>% 
+        mutate(
+            model_id = as_factor(model_id) %>% 
+                fct_reorder(!! order_by_expr, 
+                            .desc = ifelse(order_by == "auc", TRUE, FALSE)),
+            auc = auc %>% 
+                round(3) %>% 
+                as.character() %>% 
+                as_factor() %>% 
+                fct_reorder(as.numeric(model_id)), 
+            logloss = logloss %>% 
+                round(4) %>% 
+                as.character() %>% 
+                as_factor() %>% 
+                fct_reorder(as.numeric(model_id))
+        ) %>% 
+        rename(
+            gain = cumulative_capture_rate,
+            lift = cumulative_lift
+        )
+    
+    # 2A. Gain Plot 
+    
+    p3 <- gain_lift_tbl %>% 
+        ggplot(aes_string(x = "cumulative_data_fraction", y = "gain", 
+                          colour = "model_id", linetype = order_by)) +
+        geom_line(size = size) +
+        # geom segment trick to overlay baseline
+        geom_segment(x = 0, y = 0, xend = 1, yend = 1, 
+                     colour = "black", size = size) +
+        theme_tq() +
+        scale_colour_tq() +
+        # expand limits so lines don't get cut off - can include baseline
+        expand_limits(x = c(0,1), y = c(0,1)) +
+        labs(
+            title = "Gain",
+            x = "Cumulative Data Fraction",
+            y = "Gain") + 
+        theme(legend.position = "none")
+    
+    p4 <- gain_lift_tbl %>% 
+        ggplot(aes_string(x = "cumulative_data_fraction", y = "lift", 
+                          colour = "model_id", linetype = order_by)) +
+        geom_line(size = size) +
+        # geom segment trick to overlay baseline
+        geom_segment(x = 0, y = 1, xend = 1, yend = 1, 
+                     colour = "black", size = size) +
+        theme_tq() +
+        scale_colour_tq() +
+        # expand limits so lines don't get cut off - can include baseline
+        expand_limits(x = c(0,1), y = c(0,1)) +
+        labs(
+            title = "Lift",
+            x = "Cumulative Data Fraction",
+            y = "Lift") + 
+        theme(legend.position = "none")
+    
+    # Combine using cowplot
+    p_legend <- cowplot::get_legend(p1)
+    p1 <- p1 + theme(legend.position = "none")
+    
+    p <- cowplot::plot_grid(p1, p2, p3, p4, ncol = 2)
+    
+    p_title <- cowplot::ggdraw() +
+        cowplot::draw_label("H2O Model Metrics", size = 18, fontface = "bold",
+                   colour = palette_light()[[1]])
+    
+    p_subtitle <- ggdraw() + 
+        draw_label(glue("Ordered by {toupper(order_by)}"), size = 10, 
+                   colour = palette_light()[[1]])
+    
+    ret <- plot_grid(p_title, p_subtitle, p, p_legend, ncol = 1, 
+                     rel_heights = c(0.05, 0.05, 1, 0.10 * max_models))
+    # relative heights, defines the spacing around each element. Each value relates
+    # to an item in the plot_grid layout 
+
+    h2o.show_progress()
+    
+    return(ret)
+}
+
+
+# Run plot_h2o_performance ------------------------------------------------
+
+
+automl_models_h2o@leaderboard %>% 
+    plot_h2o_performance(new_data = test_tbl, order_by = "logloss", max_models = 4)
+
+automl_models_h2o@leaderboard %>% 
+    plot_h2o_performance(new_data = test_tbl, order_by = "auc", max_models = 5)
+
+### my version is slicing off the last metric (but not label) in the legend
+
+png("04_modeling/plot_h2o_performance_auc_4.png")
+automl_models_h2o@leaderboard %>% 
+    plot_h2o_performance(new_data = test_tbl, order_by = "auc", max_models = 4)
+dev.off()
+
+# doesn't cut off when show two models only 
+automl_models_h2o@leaderboard %>% 
+    plot_h2o_performance(new_data = test_tbl, order_by = "logloss", max_models = 2)
+
+
+# aside on glue package - simpler string pasting ------------------------------------------
+
+glue("Ordered by {toupper(order_by)}")
+toupper(order_by)
+# glue allows simpler to implement and understand pasting of strings, than paste or
+# paste0 functions 
 
