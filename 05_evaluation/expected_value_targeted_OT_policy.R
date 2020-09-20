@@ -247,17 +247,292 @@ savings_tbl
 # Just in test dataset 
 
 
-
-
 # 5. Optimizing By Threshold ----
+
+# 2 step process 
+# 1. Create function to calculate savings for a single threshold 
+# 2. Iterative apply the function to find optimal threshold 
+
 
 # 5.1 Create calculate_savings_by_threshold() ----
 
-# 5.2 Optimization ----
+data <- test_tbl
+h2o_model <- automl_leader
 
+# confusion matrix rates setup for default - "No OT Policy" 
+# threshold is 0 -> tnr and fnr = 0 / tpr and fpr are 1 
+
+
+
+calculate_savings_by_threshold <- function(data, h2o_model, threshold = 0,
+                                           tnr = 0, fpr = 1, fnr = 0, tpr = 1) {
+    
+    # initial state 
+    data_0_tbl <- as_tibble(data)
+    
+    # 4. Expected Value 
+    
+    # 4.1 Calculating Expected Value With OT 
+    
+    pred_0_tbl <- h2o_model %>%
+        h2o.predict(newdata = as.h2o(data_0_tbl)) %>%
+        as_tibble() %>%
+        bind_cols(
+            data_0_tbl %>%
+                select(EmployeeNumber, MonthlyIncome, OverTime)
+        )
+    
+    ev_0_tbl <- pred_0_tbl %>%
+        mutate(
+            attrition_cost = calculate_attrition_cost(
+                n = 1,
+                salary = MonthlyIncome * 12,
+                net_revenue_per_employee = 250000)
+        ) %>%
+        mutate(
+            cost_of_policy_change = 0
+        ) %>%
+        mutate(
+            expected_attrition_cost = 
+                Yes * (attrition_cost + cost_of_policy_change) +
+                No *  (cost_of_policy_change)
+        )
+    
+    
+    total_ev_0_tbl <- ev_0_tbl %>%
+        summarise(
+            total_expected_attrition_cost_0 = sum(expected_attrition_cost)
+        )
+    
+    # 4.2 Calculating Expected Value With Targeted OT
+    
+    data_1_tbl <- data_0_tbl %>%
+        add_column(Yes = pred_0_tbl$Yes) %>%
+        mutate(
+            OverTime = case_when(
+                Yes >= threshold ~ factor("No", levels = levels(data_0_tbl$OverTime)),
+                TRUE ~ OverTime
+            )
+        ) %>%
+        select(-Yes) 
+    
+    pred_1_tbl <- h2o_model %>%
+        h2o.predict(newdata = as.h2o(data_1_tbl)) %>%
+        as_tibble() %>%
+        bind_cols(
+            data_0_tbl %>%
+                select(EmployeeNumber, MonthlyIncome, OverTime),
+            data_1_tbl %>%
+                select(OverTime)
+        ) %>%
+        rename(
+            OverTime_0 = OverTime...6,
+            OverTime_1 = OverTime...7
+        )
+    
+    
+    avg_overtime_pct <- 0.10
+    
+    ev_1_tbl <- pred_1_tbl %>%
+        mutate(
+            attrition_cost = calculate_attrition_cost(
+                n = 1,
+                salary = MonthlyIncome * 12,
+                net_revenue_per_employee = 250000)
+        ) %>%
+        mutate(
+            cost_of_policy_change = case_when(
+                OverTime_1 == "No" & OverTime_0 == "Yes" 
+                ~ attrition_cost * avg_overtime_pct,
+                TRUE ~ 0
+            )) %>%
+        mutate(
+            cb_tn = cost_of_policy_change,
+            cb_fp = cost_of_policy_change,
+            cb_fn = attrition_cost + cost_of_policy_change,
+            cb_tp = attrition_cost + cost_of_policy_change,
+            expected_attrition_cost = Yes * (tpr*cb_tp + fnr*cb_fn) + 
+                No * (tnr*cb_tn + fpr*cb_fp)
+        )
+    
+    
+    total_ev_1_tbl <- ev_1_tbl %>%
+        summarise(
+            total_expected_attrition_cost_1 = sum(expected_attrition_cost)
+        )
+    
+    
+    # 4.3 Savings Calculation
+    
+    savings_tbl <- bind_cols(
+        total_ev_0_tbl,
+        total_ev_1_tbl
+    ) %>%
+        mutate(
+            savings = total_expected_attrition_cost_0 - total_expected_attrition_cost_1,
+            pct_savings = savings / total_expected_attrition_cost_0
+        )
+    
+    return(savings_tbl$savings)
+    
+}
+
+
+calculate_savings_by_threshold(test_tbl, automl_leader, 
+                               threshold = max_f1_tbl$threshold, 
+                               tnr = max_f1_tbl$tnr,
+                               fnr = max_f1_tbl$fnr,
+                               fpr = max_f1_tbl$fpr,
+                               tpr = max_f1_tbl$tpr)
+
+# test function further 
+# threshold @ max f1 
+rates_by_threshold_tbl %>% 
+    select(threshold, f1, tnr:tpr) %>% 
+    filter(f1 == max(f1))
+
+# Test function results match intuition in two extreme scenarios 
+
+# No OT Policy 
+# (rates come from the expected rates chart)
+test_tbl %>% 
+    calculate_savings_by_threshold(automl_leader, threshold = 0,
+                                   tnr = 0, fnr = 0, tpr = 1, fpr =1)
+# [1] 416403.8
+
+# Do Nothing Policy 
+test_tbl %>% 
+    calculate_savings_by_threshold(automl_leader, threshold = 1, 
+                                   tnr = 1, fnr = 1, tpr = 0, fpr = 0)
+# [1] 0
+
+
+max_f1_savings <- calculate_savings_by_threshold(test_tbl, automl_leader, 
+                               threshold = max_f1_tbl$threshold, 
+                               tnr = max_f1_tbl$tnr,
+                               fnr = max_f1_tbl$fnr,
+                               fpr = max_f1_tbl$fpr,
+                               tpr = max_f1_tbl$tpr)
+
+# 5.2 Optimization ----
+# use purrr to iteratively calculate the savings for all thresholds 
+# --> goal - maximise profitability
+
+# take sample to save processing time from running optimisation 
+# on whole dataset 
+sample <- seq(1, 220, length.out = 20) %>% round(0)
+
+# partial is a function from purrr that allows you to prefill some function args 
+partial(calculate_savings_by_threshold, data = test_tbl, h20_model = automl_leader)
+
+rates_by_threshold_optimised_tbl <- rates_by_threshold_tbl %>% 
+    select(threshold, tnr:tpr) %>% 
+    slice(sample) %>% 
+    mutate(
+        savings = pmap_dbl(
+            .l = list(
+                threshold = threshold,
+                tnr = tnr, 
+                fnr = fnr, 
+                fpr = fpr,
+                tpr = tpr
+            ), 
+            .f = partial(calculate_savings_by_threshold, data = test_tbl, h2o_model = automl_leader)
+        )
+    )
+
+# purrr within map for rowwise iteration 
+# pmap_dbl - one of pmap functions that use a list (".l") of arguments
+# - returns single numeric value 
+
+# visualise savings by threshold 
+rates_by_threshold_optimised_tbl %>% 
+    ggplot(aes(threshold, savings)) +
+    geom_line(colour = palette_light()[[1]]) +
+    geom_point(colour = palette_light()[[1]]) +
+    
+    # Optimal point
+    geom_point(shape = 21, size = 5, colour = palette_light()[[3]],
+               data = rates_by_threshold_optimised_tbl %>% 
+                   filter(savings == max(savings))
+               ) +
+    geom_label(aes(label = scales::dollar(savings)),
+               vjust = -1, colour = palette_light()[[3]], 
+               data = rates_by_threshold_optimised_tbl %>% 
+                   filter(savings == max(savings))
+               ) +
+    
+    # F1 Max 
+    geom_vline(xintercept = max_f1_tbl$threshold, 
+               colour = palette_light()[[5]], size = 2) +
+    annotate(geom = "label", label = scales::dollar(max_f1_savings), 
+             x = max_f1_tbl$threshold, y = max_f1_savings, vjust = -1.25) +
+    
+    # No OT Policy
+    geom_point(shape = 21, size = 5, colour = palette_light()[[2]],
+               data = rates_by_threshold_optimised_tbl %>% 
+                   filter(threshold == min(threshold))
+    ) +
+    geom_label(aes(label = scales::dollar(savings)),
+               vjust = -1, colour = palette_light()[[2]], 
+               data = rates_by_threshold_optimised_tbl %>% 
+                   filter(threshold == min(threshold))
+    ) +
+    
+    # Do Nothing Policy
+    geom_point(shape = 21, size = 5, colour = palette_light()[[2]],
+               data = rates_by_threshold_optimised_tbl %>% 
+                   filter(threshold == max(threshold))
+    ) +
+    geom_label(aes(label = scales::dollar(round(savings, 0))),
+               vjust = -1, colour = palette_light()[[2]], 
+               data = rates_by_threshold_optimised_tbl %>% 
+                   filter(threshold == max(threshold))
+    ) +
+    
+    # Aesthetics 
+    theme_tq() +
+    expand_limits(x = c(-.1, 1.1), y = 7e5) +
+    scale_x_continuous(labels = scales::percent, breaks = seq(0, 1, by = 0.2)) +
+    scale_y_continuous(labels = scales::dollar) +
+    labs(
+        title = "Optimisation Results: Expected Savings Maximised at 13%",
+        x = "Threshold (%)", y = "Savings"
+    )
+    
+
+# case 1 - No OT Policy 
+# - Threshold = 0 - anyone working OT targeted (flip OT from Yes to No)
+# - Does reduce turnover and result in savings (Test sample of 15% - 2.8M for full dataset)
+# - Retain high performers 
+ 
+# case 3 - maximise F1 score (model optimisation)
+# - Balances Precision and Recall - balance False Positives and False Negatives 
+# 
+# case 2 - highest savings for business 
+# - Trouble with model optimisation is False Negatives are more costly than False Positives 
+# - If we predict someone will stay but they leave, this is more costly for the business
+# -- the cost of targeting someone with a policy to make them stay costs less than replacing them 
+# - in this case FNs cost 3x more
+# -- So savings increase when the threshold for predicting employees to leave reduces 
+# - So more people will be targeted with policy than model max F1 
+
+# case 4 - benchmark - Do Nothing 
+# = Low savings - only not 0 due to h20 models not taking threshold to 1 
+# (no one has 100% probability of leaving)
 
 
 # 6 Sensitivity Analysis ----
+
+# Word of caution on savings results
+# - savings calculations based on 2 assumptions: 
+# 1) Net Rev Per Employee (NRPE) = $250K
+# 2) Avg. OT Percent = 10% 
+
+# sensitivity analysis will analyse different variations of these estimates 
+# and construcut a probability heatmap to show how impact on savings estimates 
+
+
 
 # 6.1 Create calculate_savings_by_threshold_2() ----
 
