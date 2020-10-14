@@ -103,7 +103,7 @@ train_raw_tbl %>%
 
 # Exploring numeric data  -------------------------------------------------
 
-# find unique values in character cols 
+# find unique values in numeric cols 
 train_raw_tbl %>% 
     select_if(is.numeric) %>% 
     map(unique)
