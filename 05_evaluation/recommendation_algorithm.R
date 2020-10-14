@@ -124,15 +124,141 @@ correlation_results_tbl %>%
         subtitle = "Discretising features to help identify a strategy"
     )
 
-
 # 3.0 Recommendation Strategy Development Worksheet ----
 
+# Purpose is to provide managers targeted strategies based on high risk factors
 
+## SEE "05_evaluation/recommendation_strategy_development_sheet.xlsx"
 
 
 # 4.0 Recommendation Algorithm Development ----
 
 # 4.1 Personal Development (Mentorship, Education) ----
+
+# YearsAtCompany
+# If Years at company is high, they are more likely to stay. If low they are likely to leave
+# Tie promotion if low to advance faster. Mentor if years at company low
+
+# TotalWorkingYears
+# If total working years is high, they are more likely to stay. If low they are likely to leave
+# Tie low total working years to training and formation activities
+
+# YearsInCurrentRole
+# More time in current role related to lower attrition
+# Incentivise specialisation or promote / Mentorship role
+
+# JobInvolvement
+# High Job involvement - likely to stay, If low Job involvement they are likely to leave
+# Create personal development plan if low. If high seek leadership role. 
+
+# JobSatisfaction
+# Low Job satisfaction - more likely to leave. High  Job satisfaction more likely to stay
+# Low: create personal development plan, High: Suggest take on mentorship role
+
+# PerformanceRating (add based on domain knolwedge of the dataset)
+# If Low personal development plan. If High Seek Leadership of Mentorship Roles
+
+
+# Good better best approach
+
+# (Worst case) Create personal development plan: JobInvolvement, JobSatisfaction, PerforrmanceRating
+
+# (Better case) Promote training and formation: YearsAtCompany, TotalWorkingYears
+
+# (Best case 1) Seek mentorship role: YearsInCurrentRole, YearsAtConpany, PerformanceRating, 
+# JobSatisfaction.
+
+# (Best case 2) Seek leadership role: JobInvolvement, JobSatisfaction, PerformanceRating
+
+train_readable_tbl %>% 
+    select(YearsAtCompany, TotalWorkingYears, YearsInCurrentRole, JobInvolvement, 
+           JobSatisfaction, PerformanceRating) %>% 
+    mutate_if(is.factor, as.numeric) %>% 
+    mutate(
+        personal_develoment_strategy = case_when(
+            # (Worst case) Create personal development plan: JobInvolvement, JobSatisfaction, PerforrmanceRating
+            PerformanceRating == 1 | 
+                JobSatisfaction == 1 | 
+                    JobInvolvement <= 2      ~ "Create personal development plan", 
+            
+            # (Better case) Promote training and formation: YearsAtCompany, TotalWorkingYears
+            YearsAtCompany < 3 |
+                TotalWorkingYears < 6        ~ "Promote training and formation",
+            # (Best case 1) Seek mentorship role: YearsInCurrentRole, YearsAtConpany, PerformanceRating, 
+            # JobSatisfaction.
+            (YearsInCurrentRole > 3 | YearsAtCompany >= 5) & 
+                PerformanceRating >= 3 & 
+                JobSatisfaction == 4        ~ "Seek mentorship role",
+            
+            # (Best case 2) Seek leadership role: JobInvolvement, JobSatisfaction, PerformanceRating
+            JobInvolvement >= 3 & 
+                JobSatisfaction >= 3 & 
+                    PerformanceRating >= 3  ~ "Seek Leadership role",
+            # Catch All
+            TRUE ~ "Retain and Maintain"
+        )
+    ) %>% 
+    pull(personal_develoment_strategy) %>%  
+    table()
+# NOTE - can play around with how aggressive the filtering strategy is - particularly 
+# the example of leadership role - the first result had 4's for each feature; but resulted in 
+# bucket of 1
+
+# reference values of levels in recommendation 
+train_readable_tbl %>% 
+    pull(JobInvolvement) %>% 
+    levels()
+
+train_readable_tbl %>% 
+    pull(PerformanceRating) %>% 
+    levels()
+
+
+tidy(recipe_obj)
+
+tidy(recipe_obj, number = 3) %>% 
+    filter(str_detect(terms, "YearsAtCompany"))
+
+tidy(recipe_obj, number = 3) %>% 
+    filter(str_detect(terms, "TotalWorking"))
+
+tidy(recipe_obj, number = 3) %>% 
+    filter(str_detect(terms, "YearsInCurrent"))
+
+
+# Final personal development strategy
+
+train_readable_tbl %>% 
+    select(YearsAtCompany, TotalWorkingYears, YearsInCurrentRole, JobInvolvement, 
+           JobSatisfaction, PerformanceRating) %>% 
+    mutate_if(is.factor, as.numeric) %>% 
+    mutate(
+        personal_develoment_strategy = case_when(
+            # (Worst case) Create personal development plan: JobInvolvement, JobSatisfaction, PerforrmanceRating
+            PerformanceRating == 1 | 
+                JobSatisfaction == 1 | 
+                JobInvolvement <= 2      ~ "Create personal development plan", 
+            
+            # (Better case) Promote training and formation: YearsAtCompany, TotalWorkingYears
+            YearsAtCompany < 3 |
+                TotalWorkingYears < 6        ~ "Promote training and formation",
+            # (Best case 1) Seek mentorship role: YearsInCurrentRole, YearsAtConpany, PerformanceRating, 
+            # JobSatisfaction.
+            (YearsInCurrentRole > 3 | YearsAtCompany >= 5) & 
+                PerformanceRating >= 3 & 
+                JobSatisfaction == 4        ~ "Seek mentorship role",
+            
+            # (Best case 2) Seek leadership role: JobInvolvement, JobSatisfaction, PerformanceRating
+            JobInvolvement >= 3 & 
+                JobSatisfaction >= 3 & 
+                PerformanceRating >= 3  ~ "Seek Leadership role",
+            # Catch All
+            TRUE ~ "Retain and Maintain"
+        )
+    ) 
+
+# just a starting point - not aiming for perfection; look to refine with stakeholders 
+# and walking through a sample 
 
 
 # 4.2 Professional Development (Promotion Readiness) ----
