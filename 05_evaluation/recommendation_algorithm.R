@@ -204,7 +204,7 @@ train_readable_tbl %>%
 # the example of leadership role - the first result had 4's for each feature; but resulted in 
 # bucket of 1
 
-# reference values of levels in recommendation 
+# reference values of levels in recommendation (for factors)
 train_readable_tbl %>% 
     pull(JobInvolvement) %>% 
     levels()
@@ -214,7 +214,11 @@ train_readable_tbl %>%
     levels()
 
 
-tidy(recipe_obj)
+tidy(recipe_obj) 
+
+tidy(recipe_obj) %>% 
+    tidy(recipe_obj, number = 3) %>% 
+    View()
 
 tidy(recipe_obj, number = 3) %>% 
     filter(str_detect(terms, "YearsAtCompany"))
@@ -263,9 +267,293 @@ train_readable_tbl %>%
 
 # 4.2 Professional Development (Promotion Readiness) ----
 
+# JobLevel
+#   Employees with Job Level 1 are leaving / Job Level 2 staying
+#   Promote faster for high performers
 
-# 4.3 Work Life Balance ----
+# YearsAtCompany
+#   YAC - High - Likely to stay / YAC - LOW - Likely to leave
+#   Tie promotion if low to advance faster / Mentor if YAC low
+
+# YearsInCurrentRole
+#   More time in current role related to lower attrition
+#   Incentivize specialize or promote 
+
+# Additional Features 
+#   JobInvolvement - Important for promotion readiness, incentivizes involvment for leaders and early promotion
+#   JobSatisfaction - Important for specialization, incentivizes satisfaction for mentors
+#   PerformanceRating - Important for any promotion
 
 
+# Good Better Best Approach
+            
+# Ready For Rotation: YearsInCurrentRole, JobSatisfaction (LOW)
+
+# Ready For Promotion Level 2: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+
+# Ready For Promotion Level 3: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+
+# Ready For Promotion Level 4: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+
+# Ready For Promotion Level 5: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+
+# Incentivize Specialization: YearsInCurrentRole, JobSatisfaction, PerformanceRating
+
+
+# Implement Strategy Into Code
+train_readable_tbl %>%
+    select(JobLevel, YearsInCurrentRole, 
+           JobInvolvement, JobSatisfaction, PerformanceRating) %>%
+    mutate_if(is.factor, as.numeric) %>%
+    mutate(
+        professional_development_strategy = case_when(
+            
+            # Ready For Rotation: YearsInCurrentRole, JobSatisfaction (LOW)
+            YearsInCurrentRole >= 2 & 
+                JobSatisfaction <= 2           ~ "Ready for Rotation",
+            
+            # Ready For Promotion Level 2: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+            JobLevel == 1 & 
+                YearsInCurrentRole >= 2 &
+                JobInvolvement >= 3 &
+                PerformanceRating >= 3         ~ "Ready for Promotion",
+            
+            # Ready For Promotion Level 3: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+            JobLevel == 2 & 
+                YearsInCurrentRole >= 2 &
+                JobInvolvement >= 4 &
+                PerformanceRating >= 3         ~ "Ready for Promotion",
+            
+            # Ready For Promotion Level 4: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+            JobLevel == 3 & 
+                YearsInCurrentRole >= 3 &
+                JobInvolvement >= 4 &
+                PerformanceRating >= 3         ~ "Ready for Promotion",
+            
+            # Ready For Promotion Level 5: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+            JobLevel == 4 & 
+                YearsInCurrentRole >= 4 &
+                JobInvolvement >= 4 &
+                PerformanceRating >= 3         ~ "Ready for Promotion",
+            
+            # Incentivize Specialization: YearsInCurrentRole, JobSatisfaction, PerformanceRating
+            YearsInCurrentRole >= 4 & 
+                JobSatisfaction >= 4 &
+                PerformanceRating >= 3         ~ "Incentivize Specialization",
+            
+            # Catch All
+            TRUE ~ "Retain and Maintain"
+        )
+    )
+# in promotion logic - preogressively making it harder to get promoted - goal is 
+# incentivising the attributes of performance metrics that are important. 
+# -- Key characteristics that then form part of performance review
+
+# note - incentivise specialisation overwrites a few previously labelled 
+# promotion labels for employees that might actually fit a specialisation path 
+# more than a leadership one. In practise; this is an input to a line managers 
+# decision who would know the scenario and use discretion. 
+
+tidy(recipe_obj, number = 3) %>%
+    filter(str_detect(terms, "YearsInCurrentRole"))
+
+
+
+# 4.3 Work Environment Strategy ----
+
+# OverTime
+#  Employees with high OT are leaving
+#  Reduce Overtime - work life balance
+
+# EnvironmentSatisfaction
+#  Employees with low environment satisfaction are more likely to leave
+#  Improve the workplace environment - review job assignment after period of time in current role
+
+# WorkLifeBalance
+#  Bad worklife balance - more likely to leave
+#  Improve the worklife balance
+
+# BusinessTravel
+#  More business travel - more likely to leave / Less BT - more likely to stay
+#  Reduce Business Travel where possible
+
+# DistanceFromHome
+#  High distance from Home - more likely to leave
+#  Monitor worklife balance - Monitor Business Travel
+
+# Additional Features
+#  YearsInCurrentRole - Important for reviewing a job assignment is to give sufficient time in a role (min 2 years)
+#  JobInvolvement - Not included, but important in keeping work environment satisfaction (Target Medium & Low)
+
+
+# Good Better Best Approach
+# Improve Work-Life Balance: OverTime, WorkLifeBalance
+# Monitor Business Travel: BusinessTravel, DistanceFromHome, WorkLifeBalance
+# Review Job Assignment: EnvironmentSatisfaction, YearsInCurrentRole
+# Promote Job Engagement: JobInvolvement
+
+
+# Implement Strategy Into Code
+train_readable_tbl %>%
+    select(OverTime, EnvironmentSatisfaction, WorkLifeBalance, BusinessTravel, 
+           DistanceFromHome, YearsInCurrentRole, JobInvolvement) %>%
+    mutate_if(is.factor, as.numeric) %>%
+    mutate(
+        work_environment_strategy = case_when(
+            
+            # Improve Work-Life Balance: OverTime, WorkLifeBalance
+            OverTime == 2 |
+                WorkLifeBalance == 1     ~ "Improve Work-Life Balance",
+            
+            # Monitor Business Travel: BusinessTravel, DistanceFromHome, WorkLifeBalance
+            (BusinessTravel == 3 |
+                 DistanceFromHome >= 10) &
+                WorkLifeBalance == 2     ~  "Monitor Business Travel",
+            
+            # Review Job Assignment: EnvironmentSatisfaction, YearsInCurrentRole
+            EnvironmentSatisfaction == 1 & 
+                YearsInCurrentRole >= 2  ~ "Review Job Assignment",
+            
+            # Promote Job Engagement: JobInvolvement
+            JobInvolvement <= 2  ~ "Promote Job Engagement",
+            
+            # Catch All
+            TRUE ~ "Retain and Maintain"
+        )
+    ) %>%
+    count(work_environment_strategy)
+
+train_readable_tbl %>%
+    pull(JobInvolvement) %>%
+    levels()
+
+tidy(recipe_obj, 3) %>%
+    filter(str_detect(terms, "Distance"))
+
+# 5.0 Recommendation Function
+
+data <- train_readable_tbl
+
+employee_number <- 19
+
+recommend_strategies <- function(data, employee_number) {
+    
+    data %>% 
+        filter(EmployeeNumber == employee_number) %>% 
+        mutate_if(is.factor, as.numeric) %>% 
+        
+        # Personal development strategy
+        mutate(
+            personal_develoment_strategy = case_when(
+                # (Worst case) Create personal development plan: JobInvolvement, JobSatisfaction, PerforrmanceRating
+                PerformanceRating == 1 | 
+                    JobSatisfaction == 1 | 
+                    JobInvolvement <= 2      ~ "Create personal development plan", 
+                
+                # (Better case) Promote training and formation: YearsAtCompany, TotalWorkingYears
+                YearsAtCompany < 3 |
+                    TotalWorkingYears < 6        ~ "Promote training and formation",
+                # (Best case 1) Seek mentorship role: YearsInCurrentRole, YearsAtConpany, PerformanceRating, 
+                # JobSatisfaction.
+                (YearsInCurrentRole > 3 | YearsAtCompany >= 5) & 
+                    PerformanceRating >= 3 & 
+                    JobSatisfaction == 4        ~ "Seek mentorship role",
+                
+                # (Best case 2) Seek leadership role: JobInvolvement, JobSatisfaction, PerformanceRating
+                JobInvolvement >= 3 & 
+                    JobSatisfaction >= 3 & 
+                    PerformanceRating >= 3  ~ "Seek Leadership role",
+                # Catch All
+                TRUE ~ "Retain and Maintain"
+            )
+        ) %>% 
+        #select(EmployeeNumber, personal_develoment_strategy)
+        
+        # Professional development strategy
+        mutate(
+            professional_development_strategy = case_when(
+                
+                # Ready For Rotation: YearsInCurrentRole, JobSatisfaction (LOW)
+                YearsInCurrentRole >= 2 & 
+                    JobSatisfaction <= 2           ~ "Ready for Rotation",
+                
+                # Ready For Promotion Level 2: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+                JobLevel == 1 & 
+                    YearsInCurrentRole >= 2 &
+                    JobInvolvement >= 3 &
+                    PerformanceRating >= 3         ~ "Ready for Promotion",
+                
+                # Ready For Promotion Level 3: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+                JobLevel == 2 & 
+                    YearsInCurrentRole >= 2 &
+                    JobInvolvement >= 4 &
+                    PerformanceRating >= 3         ~ "Ready for Promotion",
+                
+                # Ready For Promotion Level 4: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+                JobLevel == 3 & 
+                    YearsInCurrentRole >= 3 &
+                    JobInvolvement >= 4 &
+                    PerformanceRating >= 3         ~ "Ready for Promotion",
+                
+                # Ready For Promotion Level 5: JobLevel, YearsInCurrentRole, JobInvolvement, PerformanceRating
+                JobLevel == 4 & 
+                    YearsInCurrentRole >= 4 &
+                    JobInvolvement >= 4 &
+                    PerformanceRating >= 3         ~ "Ready for Promotion",
+                
+                # Incentivize Specialization: YearsInCurrentRole, JobSatisfaction, PerformanceRating
+                YearsInCurrentRole >= 4 & 
+                    JobSatisfaction >= 4 &
+                    PerformanceRating >= 3         ~ "Incentivize Specialization",
+                
+                # Catch All
+                TRUE ~ "Retain and Maintain"
+            )
+        ) %>% 
+        # select(EmployeeNumber, personal_develoment_strategy, professional_development_strategy)
+        
+        # Work environment strategy
+        mutate(
+            work_environment_strategy = case_when(
+                
+                # Improve Work-Life Balance: OverTime, WorkLifeBalance
+                OverTime == 2 |
+                    WorkLifeBalance == 1     ~ "Improve Work-Life Balance",
+                
+                # Monitor Business Travel: BusinessTravel, DistanceFromHome, WorkLifeBalance
+                (BusinessTravel == 3 |
+                     DistanceFromHome >= 10) &
+                    WorkLifeBalance == 2     ~  "Monitor Business Travel",
+                
+                # Review Job Assignment: EnvironmentSatisfaction, YearsInCurrentRole
+                EnvironmentSatisfaction == 1 & 
+                    YearsInCurrentRole >= 2  ~ "Review Job Assignment",
+                
+                # Promote Job Engagement: JobInvolvement
+                JobInvolvement <= 2  ~ "Promote Job Engagement",
+                
+                # Catch All
+                TRUE ~ "Retain and Maintain"
+            )
+        ) %>% 
+        select(EmployeeNumber, personal_develoment_strategy, professional_development_strategy, 
+               work_environment_strategy)
+}
+
+train_readable_tbl %>% 
+    select(EmployeeNumber)
+
+train_readable_tbl %>% 
+    recommend_strategies(12)
+
+# tested out a handful of cases and looks like it's working properly. 
+
+# It's a flexible function that can work on the test data set too
+
+test_readable_tbl %>% 
+    select(EmployeeNumber)
+
+test_readable_tbl %>% 
+    recommend_strategies(228)
 
 
